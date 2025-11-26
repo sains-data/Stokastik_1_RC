@@ -1,0 +1,353 @@
+---
+title: "Tubes PEMSTOK Kel 1"
+author: "Yohana Manik"
+date: "2025-11-18"
+output: html_document
+---
+
+## Identifikasi Ruang Keadaan
+
+```{r}
+
+# 1. Import data dari Excel
+library(readxl)
+
+# Pastikan nama file sesuai
+df <- read_excel("C:/Users/Yohana Manik/Downloads/data_wico.xlsx")
+
+
+# 2. Hitung quantile 33% dan 66%
+q1 <- quantile(df$`Jumlah Orang`, 0.33)
+q2 <- quantile(df$`Jumlah Orang`, 0.66)
+
+cat("Quantile 33%:", q1, "\n")
+cat("Quantile 66%:", q2, "\n")
+
+
+# 3. Fungsi klasifikasi state
+tentukan_state <- function(x, q1, q2) {
+  if (x <= q1) {
+    return("Sepi")
+  } else if (x <= q2) {
+    return("Normal")
+  } else {
+    return("Ramai")
+  }
+}
+
+
+# 4. Tambahkan kolom state
+df$State <- sapply(df$`Jumlah Orang`, function(x) tentukan_state(x, q1, q2))
+print(df)
+
+```
+
+## Matriks Transisi 
+
+```{r}
+# Hitung transisi antar state
+# Buat vector pasangan transisi
+transitions <- data.frame(
+  from = df$State[-nrow(df)],       # semua kecuali baris terakhir
+  to   = df$State[-1]               # mulai dari baris kedua
+)
+
+# Hitung frekuensi (mirip Counter di Python)
+counts <- as.data.frame(table(transitions))
+
+# Tampilkan hasil
+cat("\nFrekuensi Setiap Transisi State:\n")
+for (i in 1:nrow(counts)) {
+  cat(counts$from[i], "→", counts$to[i], ":", counts$Freq[i], "kali\n")
+}
+```
+
+```{r}
+# pastikan df ada dan memiliki kolom "State"
+states <- unique(df$State)
+
+# Buat matriks frekuensi transisi (counts)
+transition_counts <- matrix(
+  0,
+  nrow = length(states),
+  ncol = length(states),
+  dimnames = list(states, states)
+)
+
+for (i in 1:(nrow(df) - 1)) {
+  cur <- df$State[i]
+  nxt <- df$State[i + 1]
+  transition_counts[cur, nxt] <- transition_counts[cur, nxt] + 1
+}
+
+cat("Matriks Frekuensi Transisi (counts)\n")
+print(transition_counts)
+cat("\n")
+
+
+# Hitung jumlah transisi per baris
+row_sums <- rowSums(transition_counts)
+
+cat("Jumlah Transisi dari Setiap State (row sums)\n")
+print(row_sums)
+cat("\n")
+
+
+# Normalisasi untuk membentuk probability matrix
+transition_prob <- matrix(
+  0,
+  nrow = length(states),
+  ncol = length(states),
+  dimnames = list(states, states)
+)
+
+for (s in states) {
+  total <- row_sums[s]
+  if (total == 0) {
+    transition_prob[s, ] <- 0
+  } else {
+    transition_prob[s, ] <- transition_counts[s, ] / total
+  }
+}
+
+cat("Matriks Probabilitas Transisi\n")
+print(round(transition_prob, 4))
+cat("\n")
+
+
+# Rincian perhitungan per baris
+cat("Rincian Perhitungan (per baris)\n")
+
+for (s in states) {
+  total <- row_sums[s]
+  cat("\nDari state '", s, "': total transisi = ", total, "\n", sep = "")
+  
+  if (total == 0) {
+    cat("  Tidak ada transisi tercatat (semua probabilitas = 0)\n")
+    next
+  }
+  
+  for (ns in states) {
+    cnt <- transition_counts[s, ns]
+    prob <- transition_prob[s, ns]
+    cat(sprintf("  %s → %s: %d / %d = %.4f\n", s, ns, cnt, total, prob))
+  }
+}
+
+
+#tabel gabungan count + prob
+count_df <- as.data.frame(transition_counts)
+colnames(count_df) <- paste0("count_", colnames(count_df))
+
+prob_df <- as.data.frame(transition_prob)
+colnames(prob_df) <- paste0("prob_", colnames(prob_df))
+
+counts_probs_table <- cbind(count_df, prob_df)
+
+cat("\n Tabel Gabungan Count + Prob \n")
+print(counts_probs_table)
+```
+
+## Diagram Transisi
+
+```{r}
+install.packages("igraph")
+install.packages("ggraph")
+install.packages("tidygraph")
+```
+
+```{r}
+library(igraph)
+library(ggraph)
+library(tidygraph)
+
+# Buat edge list dari transition_prob
+edges <- data.frame(
+  from = rep(rownames(transition_prob), each = ncol(transition_prob)),
+  to   = rep(colnames(transition_prob), times = nrow(transition_prob)),
+  weight = as.vector(transition_prob)
+)
+
+# Ambil hanya edge dengan probability > 0
+edges <- edges[edges$weight > 0, ]
+
+
+# Buat graph berarah
+g <- graph_from_data_frame(edges, directed = TRUE)
+
+
+# Plot circular layout
+ggraph(g, layout = "circle") +
+  geom_edge_link(aes(label = round(weight, 2), edge_alpha = weight),
+                 angle_calc = "along",
+                 label_dodge = unit(2.5, 'mm'),
+                 arrow = arrow(length = unit(3, 'mm'))) +
+  geom_node_point(size = 10, color = "skyblue") +
+  geom_node_text(aes(label = name), size = 4, fontface = "bold") +
+  theme_void() +
+  ggtitle("Graf Probabilitas Transisi (Markov Chain)")
+
+```
+
+```{r}
+# HEATMAP Matriks Probabilitas Transisi
+
+library(ggplot2)
+library(reshape2)
+
+# Konversi matriks ke long format
+prob_long <- melt(transition_prob)
+colnames(prob_long) <- c("From", "To", "Probability")
+
+# Plot heatmap
+ggplot(prob_long, aes(x = From, y = To, fill = Probability)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "red") +
+  geom_text(aes(label = round(Probability, 2)), color = "black", size = 4) +
+  labs(
+    title = "Heatmap Probabilitas Transisi",
+    x = "State Asal",
+    y = "State Tujuan",
+    fill = "Prob."
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    panel.grid = element_blank()
+  )
+
+```
+
+## Probabilitas Langkah ke-n
+
+```{r}
+# Matriks Peluang Transisi Multi-Langkah (2, 3, 4, 5 langkah)
+
+cat("Matriks Peluang Transisi 2–5 Langkah\n")
+cat("==============================================\n")
+
+# Konversi transition_prob ke matriks numerik
+P <- as.matrix(transition_prob)
+
+# Fungsi untuk matrix power (P^k)
+matrix_power <- function(M, k) {
+  R <- diag(nrow(M))  # mulai dari matriks identitas
+  for (i in 1:k) {
+    R <- R %*% M
+  }
+  return(R)
+}
+
+multi_step_probs <- list()
+
+for (k in c(2, 3, 4, 5)) {
+  Pk <- matrix_power(P, k)
+  multi_step_probs[[as.character(k)]] <- Pk
+  
+  cat(sprintf("\n=== Matriks Probabilitas Transisi %d Langkah (P^%d) ===\n", k, k))
+  print(round(Pk, 4))
+}
+
+# Contoh akses:
+# multi_step_probs[["2"]]
+
+```
+
+## Distribusi Stasioner
+
+```{r}
+# Menghitung Distribusi Stasioner Rantai Markov
+P <- as.matrix(transition_prob)
+
+# Lakukan eigen decomposition terhadap transpose
+eigen_result <- eigen(t(P))
+
+values <- eigen_result$values
+vectors <- eigen_result$vectors
+
+# Cari eigenvalue yang paling mendekati 1
+idx <- which.min(Mod(values - 1))
+
+# Ambil eigenvector terkait eigenvalue 1
+stationary <- Re(vectors[, idx])
+
+# Normalisasi agar sum = 1 dan semua positif
+stationary <- stationary / sum(stationary)
+
+# Jika ada nilai negatif kecil karena numerik → set 0
+stationary[stationary < 0] <- 0
+stationary <- stationary / sum(stationary)
+
+# Buat dataframe hasil
+stationary_df <- data.frame(
+  State = rownames(P),
+  Probability = stationary
+)
+
+cat("\nDistribusi Stasioner:\n")
+print(stationary_df)
+
+```
+
+## Klasifikasi Ruang Keadaan
+
+```{r}
+
+# KLASIFIKASI STATE: ABSORBING, RECURRENT, TRANSIENT
+P <- as.matrix(transition_prob)
+states <- rownames(P)
+
+#1. Hitung distribusi stasioner
+
+eigen_result <- eigen(t(P))
+values <- eigen_result$values
+vectors <- eigen_result$vectors
+
+# Ambil eigenvector untuk eigenvalue = 1
+idx <- which.min(Mod(values - 1))
+stationary <- Re(vectors[, idx])
+stationary[stationary < 0] <- 0
+stationary <- stationary / sum(stationary)
+
+#2. Klasifikasi
+
+classification <- list()
+
+for (i in seq_along(states)) {
+  
+  state <- states[i]
+  
+  # Cek absorbing
+  if (abs(P[i, i] - 1) < 1e-10) {
+    classification[[state]] <- "Absorbing"
+  
+  # Cek recurrent (stationary prob > 0)
+  } else if (stationary[i] > 0) {
+    classification[[state]] <- "Recurrent"
+  
+  # Sisanya transient
+  } else {
+    classification[[state]] <- "Transient"
+  }
+}
+
+#3. Hasil 
+cat("\n Klasifikasi Ruang Keadaan \n")
+print(classification)
+
+```
+
+```{r}
+
+# Waktu Rata-Rata Kembali ke State (Mean Recurrence Time)
+# stationary adalah vektor distribusi stasioner yang sudah dihitung sebelumnya
+
+recurrence_time <- 1 / stationary
+
+# Menjadikan hasil dalam bentuk named vector
+names(recurrence_time) <- states
+
+cat("\n Waktu Rata-rata Kembali Ke Setiap State\n")
+print(recurrence_time)
+
+```
